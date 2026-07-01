@@ -24,7 +24,11 @@ jobs:
         pip install pyinstaller
     
     - name: Build executable
-      run: python build_executable.py
+      env:
+        PYTHONIOENCODING: utf-8
+      run: |
+        chcp 65001 > nul
+        python build_executable.py
     
     - name: Get version
       id: version

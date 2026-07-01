@@ -84,7 +84,7 @@ def build_executable():
         print(f"Executable built: {exe_path}")
         return exe_path, version
     else:
-        print("❌ Build failed")
+        print("Build failed")
         sys.exit(1)
 
 
@@ -97,7 +97,7 @@ def create_release_artifacts(exe_path, version):
     timestamp = datetime.now().strftime("%Y%m%d")
     base_name = f"A2LGenerator-v{version}-{timestamp}"
     
-    print(f"\n📦 Creating release artifacts...")
+    print(f"\nCreating release artifacts...")
     
     # Create zip file
     zip_name = releases_dir / f"{base_name}-windows.zip"
@@ -133,7 +133,7 @@ def create_release_notes(version):
 
 ## Release Notes
 
-### ✨ Features
+### Features
 - Modern Windows 11 UI with ttkbootstrap
 - Advanced ELF parser with DWARF debug symbol support
 - Automatic enum type detection and extraction
@@ -143,24 +143,24 @@ def create_release_notes(version):
 - Session history persistence
 - Real-time activity logging
 
-### 🔧 Technical Details
+### Technical Details
 - **Python Runtime**: Bundled (no Python installation required)
 - **Dependencies**: Automatically handled during first run
 - **License**: Apache License 2.0 (Enterprise-friendly)
 - **Size**: Standalone executable ~50-80 MB
 
-### 📥 Installation
+### Installation
 1. Download the .zip or .tar.gz file
 2. Extract to your desired location
 3. Run `A2LGenerator.exe`
 4. Select ELF/MAP files and generate A2L output
 
-### 🐛 Known Limitations
+### Known Limitations
 - MAP file parser: Placeholder (compiler-specific parsing needed)
 - Metadata parser: Placeholder (CSV/Excel support coming)
 - Currently supports Windows platform
 
-### 📝 License
+### License
 Apache License 2.0 - Suitable for enterprise and commercial use.
 
 ---
