@@ -15,7 +15,11 @@ from datetime import datetime
 
 
 def get_version():
-    """Extract version from README or return default."""
+    """Extract version from environment or README, with fallback."""
+    env_version = os.getenv("VERSION") or os.getenv("BUILD_VERSION")
+    if env_version:
+        return env_version.lstrip("v")
+
     readme_path = Path("README.md")
     if readme_path.exists():
         content = readme_path.read_text(encoding="utf-8")
