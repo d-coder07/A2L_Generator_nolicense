@@ -90,14 +90,19 @@ The resulting executable will:
 
 ## License
 
-This project is licensed under the **MIT License** - see [LICENSE](LICENSE) file for details.
+This project is licensed under the **Apache License 2.0** - see [LICENSE](LICENSE) file for details.
 
-MIT License is permissive and allows:
-- ✅ Commercial use
-- ✅ Modification
-- ✅ Distribution
-- ✅ Private use
+Apache License 2.0 is ideal for enterprise environments and provides:
+- ✅ Commercial use, modification, and distribution
+- ✅ **Patent protection** (explicit patent grant)
+- ✅ **Liability protection** (clear disclaimer of warranties)
+- ✅ Widely adopted in enterprises
+- ✅ Professional standard for large-scale projects
 - ⚠️ Requires: License and copyright notice
+
+**Permissions**: Commercial Use | Modification | Distribution | Patent Use
+**Conditions**: License & Copyright Notice | State Changes | Disclose Source
+**Limitations**: Trademark Use | Warranty | Liability
 
 ## Contributing
 
