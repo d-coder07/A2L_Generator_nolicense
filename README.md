@@ -2,6 +2,31 @@
 
 A modern, feature-rich GUI-based A2L (ASAP2) file generator for embedded automotive development. This tool extracts symbol information from ELF binaries and MAP files, automatically detects enums and floating-point scaling factors, and generates compliant A2L files for multiple compiler toolchains (GCC, IAR, ARMCC, TASKING, Hightec).
 
+## 📥 Downloads & Releases
+
+Get the latest standalone executable without needing Python installed:
+
+| Release | Format | Size | Download |
+|---------|--------|------|----------|
+| **v1.0.0 (Latest)** | Windows .exe | 20.6 MB | [Download](#) |
+| | ZIP Archive | 20.4 MB | [Download](#) |
+| | TAR.GZ Archive | 20.4 MB | [Download](#) |
+
+👉 **[View All Releases →](https://github.com/d-coder07/A2L_Generator_nolicense/releases)**
+
+### ✨ Beta & Development Releases
+
+Pre-release versions available for early access:
+- **v1.1.0-beta** - MAP file parser improvements, enhanced DWARF support
+- **v1.0.0-alpha** - Community preview, all core features
+
+### 🚀 Quick Start with Executable
+
+1. Download the `.zip` or `.tar.gz` file from Releases
+2. Extract to a folder
+3. Double-click `A2LGenerator.exe`
+4. No Python installation required!
+
 ## Features
 
 - **Modern Windows 11-Inspired UI**: Professional, responsive interface with card-based layout
@@ -74,19 +99,65 @@ A2L_Generator/
 └── LICENSE              # MIT License
 ```
 
-## Building Executable
+## 🔨 Building Executable & Creating Releases
 
-To create a standalone executable (.exe):
+### Automated Build System
+
+The project includes an automated build script for creating releases:
 
 ```bash
+# 1. Install dependencies
+pip install -r requirements.txt
 pip install pyinstaller
-pyinstaller --onefile --windowed main.py
+
+# 2. Run the build script
+python build_executable.py
 ```
 
-The resulting executable will:
-- Not require Python installation
-- Skip dependency checks (frozen app detection)
-- Run directly on Windows systems
+This creates:
+- **dist/A2LGenerator.exe** - Standalone executable
+- **releases/A2LGenerator-v*.zip** - Portable ZIP archive
+- **releases/A2LGenerator-v*.tar.gz** - Compressed TAR archive
+- **releases/RELEASE_NOTES_v*.md** - Release notes
+
+### Manual Build
+
+For custom builds:
+
+```bash
+pyinstaller --onefile --windowed \
+  --add-data "config:config" \
+  --add-data "parsers:parsers" \
+  --add-data "generator:generator" \
+  --add-data "utils:utils" \
+  --collect-all ttkbootstrap \
+  --collect-all elftools \
+  main.py
+```
+
+### Release Management
+
+Create releases on GitHub:
+
+```bash
+# Tag a release
+git tag -a v1.0.0 -m "Release v1.0.0"
+
+# Push tags to GitHub
+git push origin --tags
+```
+
+**GitHub Actions** will automatically:
+1. Build the executable on Windows
+2. Create .zip and .tar.gz archives
+3. Generate release notes
+4. Create a GitHub release with downloads
+
+### Version Scheme
+
+- **v1.x.x** - Stable releases
+- **v1.x.x-beta** - Beta pre-releases
+- **v1.x.x-alpha** - Alpha pre-releases
 
 ## License
 
@@ -122,4 +193,4 @@ A2L Generator Contributors
 
 ---
 
-**Status**: Production Ready | **Version**: 1.0.0 | **Python**: 3.7+ | **License**: MIT
+**Status**: Production Ready | **Version**: 1.0.0 | **Executable**: Available | **License**: Apache 2.0
