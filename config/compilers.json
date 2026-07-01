@@ -1,0 +1,9 @@
+{
+  "compilers": [
+    "GCC",
+    "IAR",
+    "ARMCC",
+    "TASKING",
+    "Hightec"
+  ]
+}
