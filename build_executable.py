@@ -18,7 +18,7 @@ def get_version():
     """Extract version from README or return default."""
     readme_path = Path("README.md")
     if readme_path.exists():
-        content = readme_path.read_text()
+        content = readme_path.read_text(encoding="utf-8")
         # Try to find version in README
         for line in content.split('\n'):
             if 'Version' in line or 'version' in line:
