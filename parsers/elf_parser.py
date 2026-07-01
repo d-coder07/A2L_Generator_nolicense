@@ -1,6 +1,12 @@
+from __future__ import annotations
+
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
+from typing import Any
+
 from elftools.elf.elffile import ELFFile
 
-def parse_elf(elf_file):
+
+def parse_elf(elf_file: str) -> dict[str, Any]:
     """
     Parse ELF file to extract symbols, types, enums, and scaling information.
     Uses DWARF debug info when available.
@@ -50,7 +56,7 @@ def parse_elf(elf_file):
     return symbols
 
 
-def _parse_dwarf_types(dwarf):
+def _parse_dwarf_types(dwarf: Any) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     """
     Extract enum definitions and variable type information from DWARF debug info.
     Returns: (enums_dict, dwarf_types_dict)
@@ -102,7 +108,7 @@ def _parse_dwarf_types(dwarf):
     return enums, dwarf_types
 
 
-def _get_type_die(die, dwarf):
+def _get_type_die(die: Any, dwarf: Any) -> Any:
     """Dereference DW_AT_type to get the actual type DIE."""
     type_attr = die.attributes.get('DW_AT_type')
     if type_attr:
@@ -113,7 +119,7 @@ def _get_type_die(die, dwarf):
     return None
 
 
-def _get_type_name(type_die):
+def _get_type_name(type_die: Any) -> str:
     """Extract the base type name from a DWARF type DIE."""
     if not type_die:
         return "UBYTE"
@@ -164,7 +170,7 @@ def _get_type_name(type_die):
     return "UBYTE"
 
 
-def _get_enum_reference(type_die):
+def _get_enum_reference(type_die: Any) -> str | None:
     """Check if type_die references an enumeration type."""
     if type_die and type_die.tag == 'DW_TAG_enumeration_type':
         enum_name = type_die.attributes.get('DW_AT_name')
@@ -173,7 +179,7 @@ def _get_enum_reference(type_die):
     return None
 
 
-def _extract_scaling(die):
+def _extract_scaling(die: Any) -> float | None:
     """
     Attempt to extract scaling information from variable attributes.
     Looks for metadata in DW_AT_location or custom attributes.
@@ -194,7 +200,7 @@ def _extract_scaling(die):
     return None
 
 
-def _infer_type_from_size(size):
+def _infer_type_from_size(size: int) -> str:
     """Fallback type inference based on symbol size."""
     if size == 1:
         return "UBYTE"

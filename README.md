@@ -8,9 +8,9 @@ Get the latest standalone executable without needing Python installed:
 
 | Release | Format | Size | Download |
 |---------|--------|------|----------|
-| **v1.0.0 (Latest)** | Windows .exe | 20.6 MB | [Download](#) |
-| | ZIP Archive | 20.4 MB | [Download](#) |
-| | TAR.GZ Archive | 20.4 MB | [Download](#) |
+| **v1.2.0 (Latest)** | Windows .exe | 20.6 MB | [Release](https://github.com/d-coder07/A2L_Generator_nolicense/releases/tag/v1.2.0) |
+| | ZIP Archive | 20.4 MB | [Release](https://github.com/d-coder07/A2L_Generator_nolicense/releases/tag/v1.2.0) |
+| | TAR.GZ Archive | 20.4 MB | [Release](https://github.com/d-coder07/A2L_Generator_nolicense/releases/tag/v1.2.0) |
 
 👉 **[View All Releases →](https://github.com/d-coder07/A2L_Generator_nolicense/releases)**
 
