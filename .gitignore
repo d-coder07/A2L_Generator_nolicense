@@ -1,0 +1,27 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# PyInstaller build outputs
+build/
+dist/
+*.spec
+
+# Release artifacts
+releases/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Virtual environment
+venv/
+.env
+
+# Editor files
+*.swp
+*.swo
+*.idea/
+.vscode/

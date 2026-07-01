@@ -9,6 +9,8 @@ except ModuleNotFoundError:
 
 import json
 import os
+import sys
+from pathlib import Path
 from parsers.elf_parser import parse_elf
 from parsers.map_parser import parse_map
 from parsers.metadata_parser import parse_metadata
@@ -16,8 +18,16 @@ from generator.a2l_generator import generate_a2l
 
 from utils.logger import Logger
 
-CONFIG_PATH = "config/compilers.json"
-HISTORY_PATH = "config/history.json"
+
+def resource_path(relative_path: str) -> Path:
+    if getattr(sys, "frozen", False):
+        base_path = Path(sys._MEIPASS)
+    else:
+        base_path = Path(__file__).resolve().parent
+    return base_path / relative_path
+
+CONFIG_PATH = resource_path("config/compilers.json")
+HISTORY_PATH = Path.home() / ".a2l_generator_history.json"
 FORMAT_OPTIONS = ["Classic A2L", "Extended A2L", "AUTOSAR A2L"]
 
 

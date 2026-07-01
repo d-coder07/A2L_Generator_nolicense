@@ -33,11 +33,11 @@ def install_pyinstaller():
     """Install PyInstaller if not already installed."""
     try:
         import PyInstaller
-        print("✅ PyInstaller already installed")
+        print("PyInstaller already installed")
     except ImportError:
-        print("📦 Installing PyInstaller...")
+        print("Installing PyInstaller...")
         subprocess.run([sys.executable, "-m", "pip", "install", "pyinstaller"], check=True)
-        print("✅ PyInstaller installed")
+        print("PyInstaller installed")
 
 
 def build_executable():
@@ -52,8 +52,9 @@ def build_executable():
     if build_dir.exists():
         shutil.rmtree(build_dir)
     
-    print(f"\n🔨 Building A2L Generator v{version}...")
+    print(f"\nBuilding A2L Generator v{version}...")
     
+    add_data_sep = ";" if os.name == "nt" else ":"
     cmd = [
         sys.executable,
         "-m", "PyInstaller",
@@ -61,10 +62,10 @@ def build_executable():
         "--onefile",
         "--windowed",
         "--icon=icon.ico" if Path("icon.ico").exists() else "",
-        "--add-data", "config:config",
-        "--add-data", "parsers:parsers",
-        "--add-data", "generator:generator",
-        "--add-data", "utils:utils",
+        "--add-data", f"config{add_data_sep}config",
+        "--add-data", f"parsers{add_data_sep}parsers",
+        "--add-data", f"generator{add_data_sep}generator",
+        "--add-data", f"utils{add_data_sep}utils",
         "--collect-all", "tkinter",
         "--collect-all", "ttkbootstrap",
         "--collect-all", "elftools",
@@ -80,7 +81,7 @@ def build_executable():
     result = subprocess.run(cmd)
     if result.returncode == 0:
         exe_path = dist_dir / "A2LGenerator.exe"
-        print(f"✅ Executable built: {exe_path}")
+        print(f"Executable built: {exe_path}")
         return exe_path, version
     else:
         print("❌ Build failed")
@@ -107,7 +108,7 @@ def create_release_artifacts(exe_path, version):
         if Path("config").exists():
             for config_file in Path("config").glob("*"):
                 zf.write(config_file, arcname=f"config/{config_file.name}")
-    print(f"✅ ZIP created: {zip_name} ({zip_name.stat().st_size / (1024*1024):.2f} MB)")
+    print(f"ZIP created: {zip_name} ({zip_name.stat().st_size / (1024*1024):.2f} MB)")
     
     # Create tar.gz file
     tar_name = releases_dir / f"{base_name}-windows.tar.gz"
@@ -118,7 +119,7 @@ def create_release_artifacts(exe_path, version):
         if Path("config").exists():
             for config_file in Path("config").glob("*"):
                 tf.add(config_file, arcname=f"config/{config_file.name}")
-    print(f"✅ TAR.GZ created: {tar_name} ({tar_name.stat().st_size / (1024*1024):.2f} MB)")
+    print(f"TAR.GZ created: {tar_name} ({tar_name.stat().st_size / (1024*1024):.2f} MB)")
     
     return str(zip_name), str(tar_name)
 
@@ -169,7 +170,7 @@ Apache License 2.0 - Suitable for enterprise and commercial use.
     
     notes_file = releases_dir / f"RELEASE_NOTES_v{version}.md"
     notes_file.write_text(release_notes)
-    print(f"✅ Release notes: {notes_file}")
+    print(f"Release notes: {notes_file}")
     return notes_file
 
 
@@ -197,7 +198,7 @@ def main():
     notes_path = create_release_notes(version)
     
     print("\n" + "=" * 60)
-    print("✅ Build Complete!")
+    print("Build Complete!")
     print("=" * 60)
     print(f"\n📌 Release v{version} Artifacts:")
     print(f"   • Executable: {exe_path}")
