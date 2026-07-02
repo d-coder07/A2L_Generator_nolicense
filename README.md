@@ -89,8 +89,7 @@ A2L_Generator/
 │   └── history.json     # Session history
 ├── parsers/
 │   ├── elf_parser.py    # ELF/DWARF parsing with enum & scaling detection
-│   ├── map_parser.py    # MAP file parser
-│   └── metadata_parser.py # Metadata extraction (CSV/Excel)
+│   └── map_parser.py    # MAP file parser
 ├── generator/
 │   └── a2l_generator.py # A2L file generation engine
 ├── utils/

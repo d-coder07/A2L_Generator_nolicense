@@ -160,8 +160,7 @@ def create_release_notes(version):
 4. Select ELF/MAP files and generate A2L output
 
 ### Known Limitations
-- MAP file parser: Placeholder (compiler-specific parsing needed)
-- Metadata parser: Placeholder (CSV/Excel support coming)
+- MAP file parser is basic and works with simple symbol/address/size lines
 - Currently supports Windows platform
 
 ### License

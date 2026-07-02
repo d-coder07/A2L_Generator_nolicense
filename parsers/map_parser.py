@@ -1,9 +1,18 @@
-from __future__ import annotations
+import re
 
-from typing import Any
-
-"""Map file parsing (compiler-specific)."""
-
-
-def parse_map(path: str) -> Any:
-    raise NotImplementedError('Map parser not implemented yet')
+def parse_map(map_file):
+    """
+    Parse MAP file to extract symbol addresses and sizes.
+    Returns dict: {symbol_name: {"address": addr, "size": size}}
+    """
+    symbols = {}
+    with open(map_file, 'r') as f:
+        for line in f:
+            match = re.match(r'(\w+)\s+0x([0-9A-F]+)\s+(\d+)', line)
+            if match:
+                name, addr, size = match.groups()
+                symbols[name] = {
+                    "address": int(addr, 16),
+                    "size": int(size)
+                }
+    return symbols
