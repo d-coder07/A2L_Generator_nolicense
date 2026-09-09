@@ -1,6 +1,6 @@
 # A2L Generator
 
-A modern, feature-rich GUI-based A2L (ASAP2) file generator for embedded automotive development. This tool extracts symbol information from ELF binaries and MAP files, automatically detects enums and floating-point scaling factors, and generates compliant A2L files for multiple compiler toolchains (GCC, IAR, ARMCC, TASKING, Hightec).
+A modern, feature-rich GUI-based A2L (ASAP2) file generator for embedded automotive development. This tool extracts symbol information from ELF binaries and MAP files, automatically detects enums and floating-point scaling factors, and generates compliant A2L files for GCC, IAR, ARMCC, TASKING, and HighTec ELF/DWARF toolchains without requiring a compiler selection.
 
 ## 📥 Downloads & Releases
 
@@ -39,7 +39,7 @@ Pre-release versions available for early access:
 - **Multi-Format Support**: Classic A2L, Extended A2L, AUTOSAR A2L
 - **File Management**: Add/remove ELF and MAP files with session history
 - **Real-Time Logging**: Activity log shows generation progress and results
-- **Compiler Support**: GCC, IAR, ARMCC, TASKING, Hightec
+- **Compiler Support**: Automatic ELF/DWARF parsing for GCC, IAR, ARMCC, TASKING, and HighTec outputs
 - **Cross-Platform**: Works on Windows with Python 3.7+
 
 ## Requirements
@@ -71,12 +71,29 @@ Dependencies will be automatically installed on first run.
    - Click "Add ELF" to select an ELF binary
    - Click "Add MAP" to select a MAP file
 3. **Configure Generation**:
-   - Select compiler from the dropdown
-   - Choose output A2L format (Classic/Extended/AUTOSAR)
-   - Specify output file path
+  - Choose read-only or read/write variable access
+  - Specify output file path when needed
 4. **Generate A2L**: Click "Generate A2L"
 5. **View Results**: Check the Activity Log for progress and status
 6. **Open Output**: Click "Open Folder" to view generated A2L file
+
+### Headless Command Line Usage
+
+Run `main.py` with arguments to generate an A2L without opening the GUI. The ELF and MAP files are required. The output defaults to the ELF filename with an `.a2l` extension, and access defaults to read-only.
+
+```bash
+python main.py -elf "C:\\Data\\Project.elf" -map "C:\\Data\\Project.map"
+python main.py -elf "C:\\Data\\Project.elf" -map "C:\\Data\\Project.map" -out "C:\\Data\\Project.a2l" -type readwrite -expand all
+python main.py -elf "C:\\Data\\Project.elf" -map "C:\\Data\\Project.map" -xcp-request-id 0x400007A0 -xcp-response-id 0x400007A1
+```
+
+Supported access values are `readonly`, `readwrite`, `read-only`, and `read-write`. Use `-expand none` for compact root variables, `-expand arrays` for array expansion, or `-expand all` for structures, unions, and arrays. Headless mode emits `IF_DATA XCP` by default using request ID `0x400007A0` and response ID `0x400007A1`; use `-xcp-request-id` and `-xcp-response-id` for the ECU-specific values. IDs are written exactly as supplied. Missing input files or output directories are reported on the console and return a nonzero exit code. Advanced variable selection is GUI-only; headless mode processes all eligible ELF data objects.
+
+The packaged executable uses the same interface:
+
+```bash
+A2LGenerator.exe -elf "C:\\Data\\Project.elf" -map "C:\\Data\\Project.map" -out "C:\\Data\\Project.a2l" -type readonly -xcp-request-id 0x400007A0 -xcp-response-id 0x400007A1
+```
 
 ## Project Structure
 
@@ -85,7 +102,6 @@ A2L_Generator/
 ├── main.py              # Entry point with dependency checking
 ├── gui.py               # Modern Windows 11 UI implementation
 ├── config/
-│   ├── compilers.json   # Supported compiler options
 │   └── history.json     # Session history
 ├── parsers/
 │   ├── elf_parser.py    # ELF/DWARF parsing with enum & scaling detection
