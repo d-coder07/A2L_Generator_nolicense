@@ -64,7 +64,8 @@ def build_executable():
         "-m", "PyInstaller",
         "--name", "A2LGenerator",
         "--onefile",
-        "--windowed",
+        # Keep a console so headless invocations can report progress and errors.
+        "--console",
         "--icon=icon.ico" if Path("icon.ico").exists() else "",
         "--add-data", f"config{add_data_sep}config",
         "--add-data", f"parsers{add_data_sep}parsers",
@@ -143,7 +144,7 @@ def create_release_notes(version):
 - Automatic enum type detection and extraction
 - Floating-point scaling factor extraction
 - Multi-format A2L output (Classic, Extended, AUTOSAR)
-- Compiler selection (GCC, IAR, ARMCC, TASKING, Hightec)
+- Automatic ELF/DWARF parsing for GCC, IAR, ARMCC, TASKING, and HighTec outputs
 - Session history persistence
 - Real-time activity logging
 
