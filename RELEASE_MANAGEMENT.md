@@ -2,6 +2,8 @@
 
 This guide explains how to create and manage releases for A2L Generator.
 
+Current source version: **2.1.0**. Tool developer: **DevD**. Shared metadata is defined in `app_info.py`; the complete documented change history is in `README.md`.
+
 ## Version Scheme
 
 The project uses semantic versioning:
@@ -13,6 +15,8 @@ The project uses semantic versioning:
 ## Creating a Release
 
 ### Step 1: Prepare Code
+
+Update `APP_VERSION` in `app_info.py` and the version/change history in `README.md`. The GUI and local build script share this version; `VERSION` or `BUILD_VERSION` may override build artifact naming.
 
 Ensure all changes are committed and tested:
 
@@ -28,7 +32,7 @@ Tag the release with annotated tag (includes release notes):
 
 ```bash
 # Stable release
-git tag -a v1.1.0 -m "Release v1.1.0 - Your description"
+git tag -a v2.1.0 -m "Release v2.1.0 - Tool information and template updates"
 
 # Beta release
 git tag -a v1.1.0-beta.1 -m "Release v1.1.0-beta.1"
@@ -48,7 +52,7 @@ git push origin --tags
 Or push a specific tag:
 
 ```bash
-git push origin v1.1.0
+git push origin v2.1.0
 ```
 
 ## Automated Build Process
@@ -103,7 +107,7 @@ python build_executable.py
 # Create GitHub Release manually
 # Go to: https://github.com/d-coder07/A2L_Generator_nolicense/releases
 # Click "Draft a new release"
-# Select tag: v1.1.0
+# Select tag: v2.1.0
 # Upload files from releases/ directory
 ```
 
