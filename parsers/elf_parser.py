@@ -5,10 +5,12 @@ import hashlib
 import os
 import pickle
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 from typing import Any
 
 from elftools.elf.elffile import ELFFile
+from utils.resource_limits import DEFAULT_MEMORY_LIMIT_MB, MIB, ResourceGuard, ResourceLimitError, background_priority
 
 # Toolchain/linker-generated symbols that are not application variables
 _EXCLUDED_PREFIXES = ('__', '$', '.L', '_ZN', 'CSWTCH')
@@ -17,12 +19,12 @@ _EXCLUDED_PREFIXES = ('__', '$', '.L', '_ZN', 'CSWTCH')
 _NON_DATA_SHNDX = ('SHN_UNDEF', 'SHN_ABS', 'SHN_COMMON', 0)
 
 # Bump when the parsing result layout changes so stale caches are ignored
-_CACHE_VERSION = 9
+_CACHE_VERSION = 11
 _CACHE_DIR = Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'A2LGenerator' / 'elf_cache'
 
 
 def parse_elf(elf_file: str, use_cache: bool = True, jobs: int | None = None,
-              expansion_mode: str = 'all') -> dict[str, Any]:
+              expansion_mode: str = 'all', memory_limit_mb: int = DEFAULT_MEMORY_LIMIT_MB) -> dict[str, Any]:
     """
     Parse ELF file to extract data symbols, types, enums, and scaling information.
     Only STT_OBJECT symbols are kept, so functions/API entry points never reach the A2L.
@@ -33,24 +35,29 @@ def parse_elf(elf_file: str, use_cache: bool = True, jobs: int | None = None,
     if expansion_mode not in ('none', 'arrays', 'all'):
         raise ValueError(f'Unsupported aggregate expansion mode: {expansion_mode}')
 
-    key = _cache_key(elf_file, expansion_mode)
-    if use_cache:
-        cached = _load_cache(key)
-        if cached is not None:
-            return cached
+    guard = ResourceGuard(memory_limit_mb)
+    guard.check(force=True)
+    with background_priority():
+        key = _cache_key(elf_file, expansion_mode)
+        if use_cache:
+            cached = _load_cache(key, guard)
+            if cached is not None:
+                return cached
 
-    enums, types_by_addr, types_by_name, aggregate_by_addr = _collect_dwarf_types(elf_file, jobs)
-    symbols = _collect_symbols(elf_file, types_by_addr, types_by_name, aggregate_by_addr, expansion_mode)
+        enums, types_by_addr, types_by_name, aggregate_by_addr = _collect_dwarf_types(
+            elf_file, jobs, expansion_mode, memory_limit_mb,
+        )
+        guard.check(force=True)
+        symbols = _collect_symbols(elf_file, types_by_addr, types_by_name, aggregate_by_addr, expansion_mode, guard)
+        del types_by_addr, types_by_name, aggregate_by_addr
+        symbols['_enums'] = enums
+        guard.check(force=True)
+        if use_cache:
+            _store_cache(key, symbols)
+        return symbols
 
-    # Attach enum definitions
-    symbols['_enums'] = enums
 
-    if use_cache:
-        _store_cache(key, symbols)
-    return symbols
-
-
-def _collect_symbols(elf_file: str, types_by_addr: dict[int, Any], types_by_name: dict[str, Any], aggregate_by_addr: dict[int, list[dict[str, Any]]], expansion_mode: str) -> dict[str, Any]:
+def _collect_symbols(elf_file: str, types_by_addr: dict[int, Any], types_by_name: dict[str, Any], aggregate_by_addr: dict[int, list[dict[str, Any]]], expansion_mode: str, guard: ResourceGuard | None = None) -> dict[str, Any]:
     """Read the ELF symbol table and keep only addressable data objects."""
     symbols: dict[str, Any] = {}
 
@@ -61,6 +68,8 @@ def _collect_symbols(elf_file: str, types_by_addr: dict[int, Any], types_by_name
             return symbols
 
         for symbol in symtab.iter_symbols():
+            if guard:
+                guard.check()
             name = symbol.name
             if not name or name.startswith(_EXCLUDED_PREFIXES):
                 continue
@@ -86,6 +95,8 @@ def _collect_symbols(elf_file: str, types_by_addr: dict[int, Any], types_by_name
                 leaves = []
             if leaves:
                 for leaf in leaves:
+                    if guard:
+                        guard.check()
                     leaf_name = leaf['name']
                     if leaf_name in symbols:
                         leaf_name = f'{leaf_name}__{leaf["address"]:08X}'
@@ -122,28 +133,45 @@ def _collect_symbols(elf_file: str, types_by_addr: dict[int, Any], types_by_name
     return symbols
 
 
-def _collect_dwarf_types(elf_file: str, jobs: int | None):
+def _collect_dwarf_types(elf_file: str, jobs: int | None, expansion_mode: str = 'all',
+                         memory_limit_mb: int = DEFAULT_MEMORY_LIMIT_MB):
     """Parse DWARF type info, splitting the compilation units over worker processes."""
-    workers = jobs if jobs else min(os.cpu_count() or 1, 8)
+    worker_limit = min(max((os.cpu_count() or 1) // 2, 1), 2)
+    workers = min(max(jobs or worker_limit, 1), worker_limit)
+    guard = ResourceGuard(memory_limit_mb)
+    snapshot = guard.check(force=True)
+    file_size = os.path.getsize(elf_file)
+    if (file_size >= 64 * MIB or memory_limit_mb < 768
+            or (snapshot and snapshot.available - guard.reserve < 2 * (file_size * 12 + 256 * MIB))):
+        workers = 1
 
     if workers > 1:
         try:
             with ProcessPoolExecutor(max_workers=workers) as pool:
-                results = list(pool.map(_dwarf_worker, [(elf_file, rank, workers) for rank in range(workers)]))
-            return _merge_dwarf_results(results)
+                results = pool.map(_dwarf_worker, [
+                    (elf_file, rank, workers, expansion_mode, max(256, memory_limit_mb // (workers + 1)))
+                    for rank in range(workers)
+                ])
+                return _merge_dwarf_results(results, ResourceGuard(memory_limit_mb // (workers + 1)))
+        except MemoryError:
+            raise
+        except BrokenProcessPool as exc:
+            raise ResourceLimitError('An ELF worker exited unexpectedly; parsing stopped without retrying to avoid additional memory pressure.') from exc
         except Exception:
             pass  # Fall back to in-process parsing when spawning is unavailable
 
-    return _dwarf_worker((elf_file, 0, 1))
+    return _dwarf_worker((elf_file, 0, 1, expansion_mode, memory_limit_mb))
 
 
-def _merge_dwarf_results(results):
+def _merge_dwarf_results(results, guard: ResourceGuard | None = None):
     """Combine the per-worker DWARF dictionaries."""
     enums: dict[str, Any] = {}
     by_addr: dict[int, Any] = {}
     by_name: dict[str, Any] = {}
     aggregate_by_addr: dict[int, list[dict[str, Any]]] = {}
     for part_enums, part_addr, part_name, part_aggregates in results:
+        if guard:
+            guard.check(force=True)
         enums.update(part_enums)
         by_addr.update(part_addr)
         for name, info in part_name.items():
@@ -153,14 +181,20 @@ def _merge_dwarf_results(results):
     return enums, by_addr, by_name, aggregate_by_addr
 
 
-def _dwarf_worker(args: tuple[str, int, int]):
+def _dwarf_worker(args: tuple[str, int, int, str, int]):
     """Worker entry point: parse every N-th compilation unit of the ELF file."""
-    elf_file, rank, stride = args
-    with open(elf_file, 'rb') as f:
+    elf_file, rank, stride, expansion_mode, memory_limit_mb = args
+    guard = ResourceGuard(memory_limit_mb)
+    with background_priority(), open(elf_file, 'rb') as f:
         elf = ELFFile(f)
         if not elf.has_dwarf_info():
             return {}, {}, {}, {}
-        return _parse_dwarf_types(elf.get_dwarf_info(), rank, stride)
+        section_bytes = sum(section['sh_size'] for section in elf.iter_sections()
+                            if section.name.startswith(('.debug_', '.zdebug_')))
+        guard.check(additional_bytes=section_bytes * 2, force=True)
+        dwarf = elf.get_dwarf_info()
+        guard.check(force=True)
+        return _parse_dwarf_types(dwarf, rank, stride, expansion_mode, guard)
 
 
 def _cache_key(elf_file: str, expansion_mode: str) -> str:
@@ -170,11 +204,18 @@ def _cache_key(elf_file: str, expansion_mode: str) -> str:
     return hashlib.sha1(raw.encode('utf-8')).hexdigest()
 
 
-def _load_cache(key: str) -> dict[str, Any] | None:
+def _load_cache(key: str, guard: ResourceGuard | None = None) -> dict[str, Any] | None:
     path = _CACHE_DIR / f'{key}.pkl'
     try:
+        if guard:
+            guard.check(additional_bytes=path.stat().st_size * 8, force=True, context='loading the ELF cache')
         with open(path, 'rb') as f:
-            return pickle.load(f)
+            result = pickle.load(f)
+        if guard:
+            guard.check(force=True)
+        return result
+    except MemoryError:
+        raise
     except Exception:
         return None
 
@@ -188,7 +229,7 @@ def _store_cache(key: str, symbols: dict[str, Any]) -> None:
         pass
 
 
-def _parse_dwarf_types(dwarf: Any, rank: int = 0, stride: int = 1) -> tuple[dict[str, Any], dict[int, dict[str, Any]], dict[str, dict[str, Any]], dict[int, list[dict[str, Any]]]]:
+def _parse_dwarf_types(dwarf: Any, rank: int = 0, stride: int = 1, expansion_mode: str = 'all', guard: ResourceGuard | None = None) -> tuple[dict[str, Any], dict[int, dict[str, Any]], dict[str, dict[str, Any]], dict[int, list[dict[str, Any]]]]:
     """
     Extract enum definitions and variable type information from DWARF debug info.
     Only compilation units where index % stride == rank are processed.
@@ -200,10 +241,14 @@ def _parse_dwarf_types(dwarf: Any, rank: int = 0, stride: int = 1) -> tuple[dict
     aggregate_by_addr: dict[int, list[dict[str, Any]]] = {}
 
     for index, CU in enumerate(dwarf.iter_CUs()):
+        if guard:
+            guard.check(force=True)
         if index % stride != rank:
             continue
         addr_size = CU['address_size']
         for die in CU.iter_DIEs():
+            if guard:
+                guard.check()
             # Extract enum types
             if die.tag == 'DW_TAG_enumeration_type':
                 enum_name = _die_name(die)
@@ -231,27 +276,42 @@ def _parse_dwarf_types(dwarf: Any, rank: int = 0, stride: int = 1) -> tuple[dict
                 type_name = _get_type_name(type_die)
                 if type_name:
                     info['type'] = type_name
-                info['is_array'] = _strip_type(type_die).tag == 'DW_TAG_array_type'
+                actual_type = _strip_type(type_die)
+                info['is_array'] = actual_type is not None and actual_type.tag == 'DW_TAG_array_type'
 
                 scaling = _extract_scaling(die)
                 if scaling:
                     info['scaling'] = scaling
 
-                enum_ref = _get_enum_reference(_strip_type(type_die))
+                enum_ref, enum_values = _enum_identity_and_values(type_die)
                 if enum_ref:
                     info['enum'] = enum_ref
+                    if enum_values:
+                        enums.setdefault(enum_ref, enum_values)
 
                 static_addr = _static_address(die, addr_size)
                 if info:
                     by_name.setdefault(var_name, info)
                 if static_addr is not None:
-                    leaves = _expand_aggregate(type_die, var_name, static_addr)
+                    expand = _is_aggregate(actual_type) and (
+                        expansion_mode == 'all' or (expansion_mode == 'arrays' and info['is_array'])
+                    )
+                    leaves = _expand_aggregate(type_die, var_name, static_addr, guard) if expand else []
                     if leaves:
                         aggregate_by_addr[static_addr] = leaves
                     if info:
                         by_addr[static_addr] = info
 
+        _release_cu_dies(dwarf)
+
     return enums, by_addr, by_name, aggregate_by_addr
+
+
+def _release_cu_dies(dwarf: Any) -> None:
+    """Release pyelftools 0.33 DIE caches; retained CU offsets allow lazy reloading."""
+    for unit in getattr(dwarf, '_cu_cache', ()):
+        unit._dielist.clear()
+        unit._diemap.clear()
 
 
 def _die_name(die: Any) -> str | None:
@@ -283,15 +343,15 @@ def _resolve_type(die: Any) -> Any:
         return None
 
 
-def _expand_aggregate(type_die: Any, root_name: str, root_address: int) -> list[dict[str, Any]]:
+def _expand_aggregate(type_die: Any, root_name: str, root_address: int, guard: ResourceGuard | None = None) -> list[dict[str, Any]]:
     """Expand an aggregate variable into leaf names with absolute addresses."""
     leaves: list[dict[str, Any]] = []
-    _walk_aggregate(_strip_type(type_die), root_name, root_address, leaves, set(), 0)
+    _walk_aggregate(_strip_type(type_die), root_name, root_address, leaves, set(), 0, guard)
     return leaves
 
 
 def _walk_aggregate(type_die: Any, name: str, address: int, leaves: list[dict[str, Any]],
-                    active_types: set[int], depth: int) -> None:
+                    active_types: set[int], depth: int, guard: ResourceGuard | None = None) -> None:
     """Recursively calculate array strides and member offsets from DWARF DIEs."""
     if type_die is None or depth > 32:
         return
@@ -305,27 +365,44 @@ def _walk_aggregate(type_die: Any, name: str, address: int, leaves: list[dict[st
         return
 
     if type_die.tag == 'DW_TAG_array_type':
-        element_type = _resolve_type(type_die)
-        element_type = _strip_type(element_type)
+        element_type_raw = _resolve_type(type_die)
+        element_type = _strip_type(element_type_raw)
         element_size = _type_size(element_type)
         count = _array_count(type_die)
         if element_type is None or element_size <= 0 or count <= 0:
             return
+        if not _is_aggregate(element_type):
+            datatype = _get_type_name(element_type_raw)
+            enum_ref = _get_enum_reference(element_type_raw)
+            if datatype:
+                for index in range(count):
+                    if guard:
+                        guard.check()
+                    leaves.append({
+                        'name': f'{name}[{index}]',
+                        'address': address + index * element_size,
+                        'datatype': datatype,
+                        'size': element_size,
+                        'enum': enum_ref,
+                    })
+            return
         for index in range(count):
+            if guard:
+                guard.check()
             element_name = f'{name}[{index}]'
-            if _is_aggregate(element_type):
-                _walk_aggregate(element_type, element_name, address + index * element_size,
-                                leaves, active_types | {die_id}, depth + 1)
-            else:
-                _append_leaf(leaves, element_name, element_type, address + index * element_size)
+            _walk_aggregate(element_type, element_name, address + index * element_size,
+                            leaves, active_types | {die_id}, depth + 1, guard)
         return
 
     if type_die.tag in ('DW_TAG_structure_type', 'DW_TAG_union_type', 'DW_TAG_class_type'):
         is_union = type_die.tag == 'DW_TAG_union_type'
         members = [child for child in type_die.iter_children() if child.tag == 'DW_TAG_member']
         for member in members:
+            if guard:
+                guard.check()
             member_name = _die_name(member)
-            member_type = _strip_type(_resolve_type(member))
+            member_type_raw = _resolve_type(member)
+            member_type = _strip_type(member_type_raw)
             if not member_name or member_type is None:
                 continue
             member_address = address if is_union else address + _member_offset(member)
@@ -335,9 +412,9 @@ def _walk_aggregate(type_die: Any, name: str, address: int, leaves: list[dict[st
                 member_address += bit_info.pop('byte_offset', 0)
             if _is_aggregate(member_type):
                 _walk_aggregate(member_type, qualified_name, member_address,
-                                leaves, active_types | {die_id}, depth + 1)
+                                leaves, active_types | {die_id}, depth + 1, guard)
             else:
-                _append_leaf(leaves, qualified_name, member_type, member_address, bit_info)
+                _append_leaf(leaves, qualified_name, member_type_raw, member_address, bit_info)
 
 
 def _append_leaf(leaves: list[dict[str, Any]], name: str, type_die: Any, address: int,
@@ -570,10 +647,50 @@ def _get_type_name(type_die: Any) -> str | None:
 
 
 def _get_enum_reference(type_die: Any) -> str | None:
-    """Check if type_die references an enumeration type."""
-    if type_die is not None and type_die.tag == 'DW_TAG_enumeration_type':
-        return _die_name(type_die)
-    return None
+    """Return named or typedef-derived identity for an enum type."""
+    reference, _ = _enum_identity_and_values(type_die)
+    return reference
+
+
+def _get_enum_values(type_die: Any) -> dict[str, int]:
+    """Return enumerator labels and values through array/typedef wrappers."""
+    _, values = _enum_identity_and_values(type_die)
+    return values
+
+
+def _enum_identity_and_values(type_die: Any) -> tuple[str | None, dict[str, int]]:
+    """Resolve an enum through arrays and typedefs, including anonymous enums."""
+    current = type_die
+    alias: str | None = None
+    seen: set[int] = set()
+
+    while current is not None and getattr(current, 'offset', id(current)) not in seen:
+        seen.add(getattr(current, 'offset', id(current)))
+        if current.tag == 'DW_TAG_array_type':
+            current = _resolve_type(current)
+            continue
+        if current.tag == 'DW_TAG_typedef':
+            alias = _die_name(current) or alias
+            current = _resolve_type(current)
+            continue
+        if current.tag in ('DW_TAG_const_type', 'DW_TAG_volatile_type', 'DW_TAG_restrict_type'):
+            current = _resolve_type(current)
+            continue
+        if current.tag != 'DW_TAG_enumeration_type':
+            return None, {}
+
+        enum_name = _die_name(current) or alias
+        values: dict[str, int] = {}
+        for child in current.iter_children():
+            if child.tag != 'DW_TAG_enumerator':
+                continue
+            name = _die_name(child)
+            value = child.attributes.get('DW_AT_const_value')
+            if name and value is not None:
+                values[name] = int(value.value)
+        return enum_name, values
+
+    return None, {}
 
 
 def _extract_scaling(die: Any) -> float | None:
