@@ -13,24 +13,16 @@ import tarfile
 from pathlib import Path
 from datetime import datetime
 
+from app_info import APP_DEVELOPER, APP_VERSION
+
 
 def get_version():
-    """Extract version from environment or README, with fallback."""
+    """Use shared application version unless the build environment overrides it."""
     env_version = os.getenv("VERSION") or os.getenv("BUILD_VERSION")
     if env_version:
         return env_version.lstrip("v")
 
-    readme_path = Path("README.md")
-    if readme_path.exists():
-        content = readme_path.read_text(encoding="utf-8")
-        # Try to find version in README
-        for line in content.split('\n'):
-            if 'Version' in line or 'version' in line:
-                parts = line.split()
-                for part in parts:
-                    if part.replace('.', '').replace('v', '').isdigit():
-                        return part.lstrip('v')
-    return "1.0.0"
+    return APP_VERSION
 
 
 def install_pyinstaller():
@@ -133,8 +125,16 @@ def create_release_notes(version):
     """Create release notes template."""
     releases_dir = Path("releases")
     releases_dir.mkdir(exist_ok=True)
+    readme_path = Path(__file__).resolve().parent / "README.md"
+    change_history = ""
+    if readme_path.exists():
+        readme = readme_path.read_text(encoding="utf-8")
+        if "## Change History\n" in readme:
+            change_history = "\n## Change History\n" + readme.split("## Change History\n", 1)[1].split("\n## ", 1)[0].strip() + "\n"
     
     release_notes = f"""# A2L Generator v{version}
+
+**Developer**: {APP_DEVELOPER}
 
 ## Release Notes
 
@@ -147,10 +147,17 @@ def create_release_notes(version):
 - Automatic ELF/DWARF parsing for GCC, IAR, ARMCC, TASKING, and HighTec outputs
 - Session history persistence
 - Real-time activity logging
+- About dialog with version, developer, capability summary, and validation reminder
+- Only Update (No Cleaning) template preservation with duplicate prevention
+- Automatic or manual variable selection with read/write calibration access
+- Aggregate expansion and configurable XCP IF_DATA tags
+- GUI and headless command-line generation
+
+{change_history}
 
 ### Technical Details
 - **Python Runtime**: Bundled (no Python installation required)
-- **Dependencies**: Automatically handled during first run
+- **Dependencies**: Bundled in executable; manually installed for source runs. No startup package installation.
 - **License**: Apache License 2.0 (Enterprise-friendly)
 - **Size**: Standalone executable ~50-80 MB
 
@@ -173,7 +180,7 @@ Apache License 2.0 - Suitable for enterprise and commercial use.
 """
     
     notes_file = releases_dir / f"RELEASE_NOTES_v{version}.md"
-    notes_file.write_text(release_notes)
+    notes_file.write_text(release_notes, encoding="utf-8")
     print(f"Release notes: {notes_file}")
     return notes_file
 
