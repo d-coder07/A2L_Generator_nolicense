@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tkinter as tk
+from utils.resource_limits import DEFAULT_MEMORY_LIMIT_MB
 
 REQUIRED_PACKAGES: list[str] = ["ttkbootstrap", "pyelftools"]
 
@@ -46,6 +47,10 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("-elf", required=True, help="Input ELF file")
     parser.add_argument("-map", required=True, help="Input MAP file")
     parser.add_argument("-out", help="Output A2L file; defaults to the ELF name with .a2l")
+    parser.add_argument("-jobs", type=int, choices=(1, 2), default=2,
+                        help="Maximum ELF workers (large files use one); defaults to 2")
+    parser.add_argument("-memory-limit", type=int, default=DEFAULT_MEMORY_LIMIT_MB,
+                        help="Memory allowance in MiB; minimum 256, default 2048. System RAM reserve still applies")
     parser.add_argument(
         "-type",
         choices=("readonly", "readwrite", "read-only", "read-write"),
@@ -59,23 +64,15 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         help="Aggregate expansion: none, arrays, or all; defaults to none"
     )
     parser.add_argument(
-        "-xcp-request-id",
-        default="0x400007A0",
-        help="XCP CAN master/request ID; defaults to 0x400007A0"
-    )
-    parser.add_argument(
-        "-xcp-response-id",
-        default="0x400007A1",
-        help="XCP CAN slave/response ID; defaults to 0x400007A1"
+        "-if-data",
+        nargs="+",
+        choices=("PROTOCOL_LAYER", "SEGMENT", "DAQ", "PAG", "PGM", "DAQ_EVENT",
+                 "XCP_ON_CAN", "XCP_ON_SXL", "XCP_ON_TCP_IP", "XCP_ON_UDP_IP",
+                 "XCP_ON_USB", "XCP_ON_FLX", "XCP_ON_ICP"),
+        default=["PROTOCOL_LAYER", "DAQ", "DAQ_EVENT", "XCP_ON_CAN"],
+        help="IF_DATA XCP tags; defaults to PROTOCOL_LAYER DAQ DAQ_EVENT XCP_ON_CAN"
     )
     return parser
-
-
-def _parse_xcp_id(value: str) -> int:
-    try:
-        return int(value, 0) if value.lower().startswith("0x") else int(value, 16)
-    except ValueError as exc:
-        raise ValueError(f"Invalid XCP CAN ID: {value}") from exc
 
 
 def _run_headless(argv: list[str]) -> int:
@@ -102,14 +99,14 @@ def _run_headless(argv: list[str]) -> int:
     access = "Read and Write (measurement + calibration)" if args.type in ("readwrite", "read-write") else "Read only (measurement)"
 
     try:
-        xcp_request_id = _parse_xcp_id(args.xcp_request_id)
-        xcp_response_id = _parse_xcp_id(args.xcp_response_id)
         from generator.a2l_generator import generate_a2l
         from parsers.elf_parser import parse_elf
         from parsers.map_parser import parse_map
 
         print(f"Parsing ELF: {elf_path}")
-        elf_symbols = parse_elf(elf_path, expansion_mode=args.expand)
+        print(f"Resource protection: up to {args.jobs} workers, {args.memory_limit} MiB memory allowance")
+        elf_symbols = parse_elf(elf_path, expansion_mode=args.expand, jobs=args.jobs,
+                    memory_limit_mb=args.memory_limit)
         print(f"Parsing MAP: {map_path}")
         map_symbols = parse_map(map_path)
         print(f"Generating A2L ({access}): {output_path}")
@@ -119,9 +116,9 @@ def _run_headless(argv: list[str]) -> int:
             output_path,
             selected_symbols=None,
             advanced_mode=False,
-            xcp_request_id=xcp_request_id,
-            xcp_response_id=xcp_response_id,
+            if_data_tags=args.if_data,
             access=access,
+            memory_limit_mb=args.memory_limit,
         )
     except Exception as exc:
         print(f"Error: A2L generation failed: {exc}", file=sys.stderr)
@@ -139,8 +136,8 @@ def main() -> None:
     if len(sys.argv) > 1:
         raise SystemExit(_run_headless(sys.argv[1:]))
 
-    if not is_frozen():
-        ensure_dependencies()
+    #if not is_frozen():
+        #ensure_dependencies()
 
     from gui import A2LGeneratorGUI
 

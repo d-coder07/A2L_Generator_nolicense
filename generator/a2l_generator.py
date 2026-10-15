@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime
+from utils.resource_limits import DEFAULT_MEMORY_LIMIT_MB, ResourceGuard
 
 # ASAP2 datatype name mapping from internal ELF-parser types
 _DATATYPE_MAP: dict[str, str] = {
@@ -64,13 +65,16 @@ _IDENT_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_.\[\]]*$')
 
 def generate_a2l(elf_data, map_data, output_path, template_path=None, selected_symbols=None,
                  advanced_mode=False,
-                 xcp_request_id=None, xcp_response_id=None, access='Read only'):
+                 if_data_tags=None, access='Read only', only_update=False,
+                 memory_limit_mb=DEFAULT_MEMORY_LIMIT_MB):
     """Generate industry-standard A2L file with MEASUREMENT and CHARACTERISTIC definitions.
 
     selected_symbols may be a sequence of names or a {name: 'r'|'rw'} mapping that
     overrides the global access setting per variable.
     """
 
+    guard = ResourceGuard(memory_limit_mb)
+    guard.check(additional_bytes=len(elf_data) * 128, force=True, context='preparing selected variables')
     map_data = map_data or {}
     default_access = 'rw' if str(access).lower().startswith('read and') or str(access).lower().startswith('read/') else 'r'
 
@@ -123,24 +127,32 @@ def generate_a2l(elf_data, map_data, output_path, template_path=None, selected_s
     lines.append('    /end MOD_COMMON')
     lines.append('')
 
-    lines.extend(_build_xcp_if_data(xcp_request_id, xcp_response_id))
+    lines.extend(_build_xcp_if_data(if_data_tags))
     lines.extend(_build_record_layouts(used_types))
-    lines.extend(_build_compu_methods(elf_data, selected_symbols))
-    lines.extend(_build_measurements(elf_data, map_data, selected_symbols, access_map))
+    lines.extend(_build_enum_tables(enums, elf_data, selected_symbols))
+    lines.extend(_build_compu_methods(elf_data, selected_symbols, enums, guard))
+    lines.extend(_build_measurements(elf_data, map_data, selected_symbols, access_map, enums, guard))
 
     if writable:
-        lines.extend(_build_characteristics(elf_data, map_data, writable, enums))
+        lines.extend(_build_characteristics(elf_data, map_data, writable, enums, guard))
 
     lines.append('  /end MODULE')
     lines.append('')
     lines.append('/end PROJECT')
 
+    body_bytes = sum(len(line) + 1 for line in lines) * 2
+    guard.check(additional_bytes=body_bytes, force=True, context='building generated A2L text')
     body_text = '\n'.join(lines) + '\n'
+    del lines
 
     if template_path and os.path.exists(template_path):
-        with open(template_path, 'r', encoding='utf-8') as f:
+        guard.check(additional_bytes=os.path.getsize(template_path) * 2, force=True,
+                context='loading the A2L template')
+        with open(template_path, 'r', encoding='utf-8', newline='' if only_update else None) as f:
             template = f.read()
-        if '{{A2L_BODY}}' in template:
+        if only_update:
+            final_text = _merge_template_variable_tail(template, body_text, only_update=True)
+        elif '{{A2L_BODY}}' in template:
             final_text = template.replace('{{A2L_BODY}}', body_text)
         elif '{A2L_BODY}' in template:
             final_text = template.replace('{A2L_BODY}', body_text)
@@ -149,12 +161,13 @@ def generate_a2l(elf_data, map_data, output_path, template_path=None, selected_s
     else:
         final_text = body_text
 
-    with open(output_path, 'w', encoding='utf-8') as f:
+    guard.check(additional_bytes=len(final_text) * 2, force=True, context='preparing the output file')
+    with open(output_path, 'w', encoding='utf-8', newline='' if only_update else None) as f:
         f.write(final_text)
 
 
-def _merge_template_variable_tail(template: str, generated_body: str) -> str:
-    """Keep template configuration and replace its module variable-data tail."""
+def _merge_template_variable_tail(template: str, generated_body: str, only_update: bool = False) -> str:
+    """Replace the variable-data tail, or append new definitions without cleaning."""
     generated_lines = generated_body.splitlines()
     module_end = _find_line(generated_lines, r'^\s*/end MODULE\s*$')
     if module_end is None:
@@ -162,12 +175,34 @@ def _merge_template_variable_tail(template: str, generated_body: str) -> str:
 
     variable_start = _find_line(
         generated_lines,
-        r'^\s*/begin (?:RECORD_LAYOUT|COMPU_METHOD|MEASUREMENT|CHARACTERISTIC)\b',
+        r'^\s*/begin (?:RECORD_LAYOUT|COMPU_VTAB|COMPU_METHOD|MEASUREMENT|CHARACTERISTIC)\b',
     )
     if variable_start is None:
         variable_lines: list[str] = []
     else:
         variable_lines = generated_lines[variable_start:module_end]
+
+    if only_update:
+        block_types = r'RECORD_LAYOUT|COMPU_VTAB|COMPU_METHOD|MEASUREMENT|CHARACTERISTIC'
+        existing = set(re.findall(
+            rf'^\s*/begin ({block_types})\s+(\S+)', template, re.MULTILINE | re.IGNORECASE,
+        ))
+        existing = {(block_type.upper(), name) for block_type, name in existing}
+        blocks = re.finditer(
+            rf'^ * /begin ({block_types})\s+(\S+).*?^ * /end \1\b[^\n]*',
+            '\n'.join(variable_lines), re.MULTILINE | re.DOTALL,
+        )
+        additions = [
+            block.group(0) for block in blocks
+            if (block.group(1).upper(), block.group(2)) not in existing
+        ]
+        if not additions:
+            return template
+        ending = re.search(r'^[ \t]*/end MODULE\b', template, re.MULTILINE | re.IGNORECASE)
+        insert_at = ending.start() if ending else len(template)
+        newline = '\r\n' if '\r\n' in template else '\n'
+        added_text = (newline + '\n\n'.join(additions).replace('\n', newline) + newline + newline)
+        return template[:insert_at] + added_text + template[insert_at:]
 
     template_lines = template.splitlines()
     template_module_end = _find_line(template_lines, r'^\s*/end MODULE\s*$')
@@ -179,7 +214,7 @@ def _merge_template_variable_tail(template: str, generated_body: str) -> str:
     if if_data_end is None:
         variable_tail_start = _find_line(
             template_lines,
-            r'^\s*/begin (?:RECORD_LAYOUT|COMPU_METHOD|MEASUREMENT|CHARACTERISTIC)\b',
+            r'^\s*/begin (?:RECORD_LAYOUT|COMPU_VTAB|COMPU_METHOD|MEASUREMENT|CHARACTERISTIC)\b',
         )
         if variable_tail_start is None or variable_tail_start > template_module_end:
             variable_tail_start = template_module_end
@@ -274,32 +309,64 @@ _XCP_DAQ = [
 ]
 
 
-def _build_xcp_if_data(request_id, response_id) -> list[str]:
-    """Emit the XCP-on-CAN interface block CANoe needs in order to talk to the slave."""
-    if request_id is None or response_id is None:
+def _build_xcp_if_data(selected_tags) -> list[str]:
+    """Emit the selected standard XCP IF_DATA tags using default values."""
+    if selected_tags is None:
+        selected_tags = ('PROTOCOL_LAYER', 'DAQ', 'DAQ_EVENT', 'XCP_ON_CAN')
+    selected = set(selected_tags)
+    if not selected:
         return []
 
     lines = ['    /begin IF_DATA XCP']
-    lines.extend(_XCP_PROTOCOL_LAYER)
-    lines.extend(_XCP_DAQ)
-    lines.append('      /begin XCP_ON_CAN')
-    lines.append('        0x0100')
-    lines.append(f'        CAN_ID_MASTER 0x{_can_id(request_id):08X}')
-    lines.append(f'        CAN_ID_SLAVE 0x{_can_id(response_id):08X}')
-    lines.append('        BAUDRATE 0x0007A120')
-    lines.append('        MAX_DLC_REQUIRED')
-    lines.append('      /end XCP_ON_CAN')
+    if 'PROTOCOL_LAYER' in selected:
+        lines.extend(_XCP_PROTOCOL_LAYER)
+    if 'SEGMENT' in selected:
+        lines.extend(_XCP_SEGMENT)
+    if 'DAQ' in selected:
+        lines.extend(_XCP_DAQ[:10])
+        if 'DAQ_EVENT' in selected:
+            lines.extend(_XCP_DAQ[10:])
+        else:
+            lines.extend(['      /end DAQ'])
+    if 'PAG' in selected:
+        lines.extend(_XCP_PAG)
+    if 'PGM' in selected:
+        lines.extend(_XCP_PGM)
+    if 'XCP_ON_CAN' in selected:
+        lines.extend(_XCP_ON_CAN)
+    for tag in ('XCP_ON_SXL', 'XCP_ON_TCP_IP', 'XCP_ON_UDP_IP', 'XCP_ON_USB', 'XCP_ON_FLX', 'XCP_ON_ICP'):
+        if tag in selected:
+            lines.extend(_transport_template(tag))
     lines.append('    /end IF_DATA')
     lines.append('')
     return lines
 
 
-def _can_id(value) -> int:
-    """Return the XCP identifier exactly as supplied by the ECU configuration."""
-    ident = int(value)
-    if ident < 0 or ident > 0xFFFFFFFF:
-        raise ValueError(f"XCP CAN ID is outside the 32-bit range: {value}")
-    return ident
+_XCP_SEGMENT = [
+    '      /begin SEGMENT',
+    '        0x00',
+    '        0x00',
+    '        0x00',
+    '        0x00',
+    '      /end SEGMENT',
+]
+
+_XCP_PAG = ['      /begin PAG', '        0x00', '      /end PAG']
+_XCP_PGM = ['      /begin PGM', '        PGM_MODE_ABSOLUTE', '        0x00', '        0x00', '      /end PGM']
+_XCP_ON_CAN = [
+    '      /begin XCP_ON_CAN',
+    '        0x0100',
+    '        CAN_ID_MASTER 0x400007A0',
+    '        CAN_ID_SLAVE 0x400007A1',
+    '        BAUDRATE 0x0007A120',
+    '        MAX_DLC_REQUIRED',
+    '      /end XCP_ON_CAN',
+]
+
+
+def _transport_template(tag: str) -> list[str]:
+    """Return the default transport tag template for later ECU-specific configuration."""
+    return [f'      /begin {tag}', '        0x0100', f'      /end {tag}']
 
 
 def _build_record_layouts(used_types) -> list[str]:
@@ -316,12 +383,43 @@ def _build_record_layouts(used_types) -> list[str]:
     return lines
 
 
-def _build_compu_methods(elf_data, selected_symbols) -> list[str]:
-    """Emit a LINEAR conversion per scaled symbol; unscaled symbols use NO_COMPU_METHOD."""
+def _build_enum_tables(enums, elf_data, selected_symbols) -> list[str]:
+    """Emit COMPU_VTAB verbal tables for enum types used by selected variables."""
+    used_enums = sorted({elf_data[s].get('enum') for s in selected_symbols
+                         if elf_data[s].get('enum') in enums})
+    lines: list[str] = []
+    for enum_name in used_enums:
+        values = enums.get(enum_name, {})
+        if not values:
+            continue
+        table_name = _enum_table_name(enum_name)
+        lines.append(f'    /begin COMPU_VTAB {table_name} "{enum_name}" TAB_VERB {len(values)}')
+        for label, value in sorted(values.items(), key=lambda item: item[1]):
+            lines.append(f'      {int(value)} "{_a2l_text(label)}"')
+        lines.append('    /end COMPU_VTAB')
+        lines.append('')
+    return lines
+
+
+def _build_compu_methods(elf_data, selected_symbols, enums, guard: ResourceGuard | None = None) -> list[str]:
+    """Emit enum TAB_VERB and numeric LINEAR conversion methods."""
     lines: list[str] = []
 
     added: set[str] = set()
     for symbol in selected_symbols:
+        if guard:
+            guard.check()
+        enum_name = elf_data.get(symbol, {}).get('enum')
+        if enum_name in enums:
+            method_name = _enum_method_name(enum_name)
+            if method_name not in added:
+                table_name = _enum_table_name(enum_name)
+                lines.append(f'    /begin COMPU_METHOD {method_name} "{enum_name}" TAB_VERB "%10.0" ""')
+                lines.append(f'      COMPU_TAB_REF {table_name}')
+                lines.append('    /end COMPU_METHOD')
+                lines.append('')
+                added.add(method_name)
+            continue
         scaling = elf_data.get(symbol, {}).get('scaling', 1.0)
         if not scaling or scaling == 1.0:
             continue
@@ -338,12 +436,36 @@ def _build_compu_methods(elf_data, selected_symbols) -> list[str]:
     return lines
 
 
-def _build_measurements(elf_data, map_data, selected_symbols, access_map=None) -> list[str]:
+def _enum_table_name(enum_name: str) -> str:
+    """Create a valid, stable ASAP2 identifier for an enum table."""
+    return f'CT_{_safe_identifier(enum_name)}'
+
+
+def _enum_method_name(enum_name: str) -> str:
+    """Create a valid, stable ASAP2 identifier for an enum conversion method."""
+    return f'CM_ENUM_{_safe_identifier(enum_name)}'
+
+
+def _safe_identifier(value: str) -> str:
+    """Replace type-name characters that are invalid in an ASAP2 identifier."""
+    result = re.sub(r'[^A-Za-z0-9_]', '_', value)
+    return result if result and (result[0].isalpha() or result[0] == '_') else f'_{result}'
+
+
+def _a2l_text(value: str) -> str:
+    """Escape an enum label for an A2L quoted string."""
+    return str(value).replace('\\', '\\\\').replace('"', '\\"')
+
+
+def _build_measurements(elf_data, map_data, selected_symbols, access_map=None, enums=None, guard: ResourceGuard | None = None) -> list[str]:
     """Build one MEASUREMENT block per symbol using ASAP2 positional-arg syntax."""
     lines: list[str] = []
     access_map = access_map or {}
+    enums = enums or {}
 
     for symbol in selected_symbols:
+        if guard:
+            guard.check()
         elf_info = elf_data[symbol]
         map_info = map_data.get(symbol, {})
 
@@ -351,13 +473,19 @@ def _build_measurements(elf_data, map_data, selected_symbols, access_map=None) -
         raw_type = elf_info.get('datatype', 'UBYTE')
         scaling  = elf_info.get('scaling', 1.0)
         link     = elf_info.get('symbol', symbol)
+        enum_name = elf_info.get('enum')
 
         a2l_type     = _to_a2l_datatype(raw_type)
         lower, upper = _TYPE_LIMITS.get(a2l_type, (0, 255))
         bit_size = elf_info.get('bit_size')
         if bit_size:
             upper = (1 << bit_size) - 1
-        if scaling and scaling != 1.0:
+        if enum_name:
+            compu_method = _enum_method_name(enum_name)
+            enum_values = enums.get(enum_name, {}).values()
+            if enum_values:
+                lower, upper = min(enum_values), max(enum_values)
+        elif scaling and scaling != 1.0:
             compu_method = f'CM_{symbol}'
             # Limits are physical values, so they follow the conversion
             lower, upper = sorted((lower * scaling, upper * scaling))
@@ -384,29 +512,36 @@ def _build_measurements(elf_data, map_data, selected_symbols, access_map=None) -
     return lines
 
 
-def _build_characteristics(elf_data, map_data, selected_symbols, enums) -> list[str]:
+def _build_characteristics(elf_data, map_data, selected_symbols, enums, guard: ResourceGuard | None = None) -> list[str]:
     """Build one CHARACTERISTIC block per symbol (advanced mode)."""
     lines: list[str] = []
 
     for symbol in selected_symbols:
+        if guard:
+            guard.check()
         elf_info = elf_data[symbol]
         map_info = map_data.get(symbol, {})
 
         address  = elf_info.get('address') or map_info.get('address', 0)
         raw_type = elf_info.get('datatype', 'UBYTE')
         link     = elf_info.get('symbol', symbol)
+        enum_name = elf_info.get('enum')
 
         a2l_type     = _to_a2l_datatype(raw_type)
         lower, upper = _TYPE_LIMITS.get(a2l_type, (0, 255))
         bit_size = elf_info.get('bit_size')
         if bit_size:
             upper = (1 << bit_size) - 1
+        if enum_name in enums and enums[enum_name]:
+            enum_values = enums[enum_name].values()
+            lower, upper = min(enum_values), max(enum_values)
         rl_name      = _RECORD_LAYOUT.get(a2l_type, 'RL_UBYTE_VALUE')
 
         # ASAP2 CHARACTERISTIC: name longIdentifier type address recordLayout maxDiff conversion lowerLimit upperLimit
         # Prefixed name keeps the CHARACTERISTIC unique against the MEASUREMENT of the same symbol
         lines.append(f'    /begin CHARACTERISTIC C_{symbol} "{symbol}"')
-        lines.append(f'      VALUE 0x{address:08X} {rl_name} 0 NO_COMPU_METHOD {_num(lower)} {_num(upper)}')
+        conversion = _enum_method_name(enum_name) if enum_name and enum_name in enums else 'NO_COMPU_METHOD'
+        lines.append(f'      VALUE 0x{address:08X} {rl_name} 0 {conversion} {_num(lower)} {_num(upper)}')
         lines.append(f'      FORMAT "{_TYPE_FORMAT.get(a2l_type, "%10.0")}"')
         lines.append(f'      SYMBOL_LINK "{link}" 0')
         if bit_size and elf_info.get('bit_mask') is not None:
